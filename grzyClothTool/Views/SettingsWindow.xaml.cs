@@ -90,7 +90,7 @@ namespace grzyClothTool.Views
                 {
                     OnPropertyChanged(nameof(GTAVPath));
                     LogHelper.Log($"GTA V path set to: {selectedGTAPath.FolderName}", LogType.Info);
-W
+
                     MainWindow.Instance?.PreviewHost?.RetryInitialization();
                 }
                 else
