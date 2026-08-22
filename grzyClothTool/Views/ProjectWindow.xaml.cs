@@ -482,6 +482,73 @@ namespace grzyClothTool.Views
             SaveHelper.SetUnsavedChanges(true);
         }
 
+        private void ClothingLocator_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new ClothingLocatorDialog
+            {
+                Owner = Window.GetWindow(this)
+            };
+
+            if (dialog.ShowDialog() == true && dialog.IsSearchRequested && !string.IsNullOrEmpty(dialog.ResultModdedID))
+            {
+                // Find the search box in the current TabControl ContentPresenter
+                if (AddonTabControl.ItemContainerGenerator.ContainerFromItem(AddonTabControl.SelectedItem) is TabItem selectedTab)
+                {
+                    var contentPresenter = FindVisualChild<ContentPresenter>(selectedTab);
+                    if (contentPresenter != null)
+                    {
+                        var dataTemplateControl = contentPresenter.ContentTemplate.FindName("HeaderSearchBox", contentPresenter) as System.Windows.Controls.TextBox;
+                        if (dataTemplateControl != null)
+                        {
+                            dataTemplateControl.Text = dialog.ResultModdedID;
+                            return;
+                        }
+                    }
+                }
+
+                // Fallback approach: search the entire visual tree of the TabControl for a TextBox named "HeaderSearchBox"
+                var searchBox = FindVisualChildByName<System.Windows.Controls.TextBox>(AddonTabControl, "HeaderSearchBox");
+                if (searchBox != null)
+                {
+                    searchBox.Text = dialog.ResultModdedID;
+                }
+            }
+        }
+
+        private static T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+        {
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child != null && child is T)
+                    return (T)child;
+                else
+                {
+                    T childOfChild = FindVisualChild<T>(child);
+                    if (childOfChild != null)
+                        return childOfChild;
+                }
+            }
+            return null;
+        }
+
+        private static T FindVisualChildByName<T>(DependencyObject parent, string name) where T : FrameworkElement
+        {
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is T element && element.Name == name)
+                    return element;
+                else
+                {
+                    T childOfChild = FindVisualChildByName<T>(child, name);
+                    if (childOfChild != null)
+                        return childOfChild;
+                }
+            }
+            return null;
+        }
+
         private void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (e.AddedItems.Count > 0)
