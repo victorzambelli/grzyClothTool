@@ -24,7 +24,7 @@ namespace grzyClothTool.Models.Drawable;
 public class GDrawable : INotifyPropertyChanged
 {
     private static readonly BlockingCollection<GDrawable> _loadQueue = new();
-    private readonly static SemaphoreSlim _semaphore = new(3);
+    private readonly static SemaphoreSlim _semaphore = new(Math.Clamp(Environment.ProcessorCount - 1, 3, 8));
 
     static GDrawable()
     {
@@ -291,6 +291,23 @@ public class GDrawable : INotifyPropertyChanged
         set { _enableKeepPreview = value; OnPropertyChanged(); }
     }
 
+    private bool _ignoreWarnings;
+    public bool IgnoreWarnings
+    {
+        get => _ignoreWarnings;
+        set
+        {
+            if (_ignoreWarnings != value)
+            {
+                _ignoreWarnings = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(HasTexturesNeedingOptimization));
+                OnPropertyChanged(nameof(HasEmbeddedTexturesNeedingOptimization));
+                ValidateDetails();
+            }
+        }
+    }
+
     public float HairScaleValue { get; set; } = 0.5f;
 
 
@@ -306,7 +323,15 @@ public class GDrawable : INotifyPropertyChanged
     public bool EnableHighHeels
     {
         get => _enableHighHeels;
-        set { _enableHighHeels = value; OnPropertyChanged(); }
+        set
+        {
+            if (_enableHighHeels != value)
+            {
+                _enableHighHeels = value;
+                OnPropertyChanged();
+                ValidateDetails();
+            }
+        }
     }
 
     private bool _hidesHair;
@@ -334,6 +359,11 @@ public class GDrawable : INotifyPropertyChanged
         }
     }
 
+    private readonly TaskCompletionSource _detailsLoadedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    [JsonIgnore]
+    public Task DetailsLoaded => _isLoading ? _detailsLoadedTcs.Task : Task.CompletedTask;
+
     private bool _isLoading;
     public bool IsLoading
     {
@@ -341,6 +371,10 @@ public class GDrawable : INotifyPropertyChanged
         set
         {
             _isLoading = value;
+            if (!value)
+            {
+                _detailsLoadedTcs.TrySetResult();
+            }
             OnPropertyChanged(nameof(IsLoading));
         }
     }
@@ -425,10 +459,10 @@ public class GDrawable : INotifyPropertyChanged
     public ObservableCollection<Texture.GTexture> Textures { get; set; }
 
     [JsonIgnore]
-    public bool HasTexturesNeedingOptimization => Textures?.Any(t => t.TxtDetails?.IsOptimizeNeeded == true && !t.IsOptimizedDuringBuild) ?? false;
+    public bool HasTexturesNeedingOptimization => !IgnoreWarnings && (Textures?.Any(t => t.TxtDetails?.IsOptimizeNeeded == true && !t.IsOptimizedDuringBuild) ?? false);
 
     [JsonIgnore]
-    public bool HasEmbeddedTexturesNeedingOptimization => Details?.EmbeddedTextures?.Values.Any(t => t.Details?.IsOptimizeNeeded == true && !t.IsOptimizedDuringBuild) ?? false;
+    public bool HasEmbeddedTexturesNeedingOptimization => !IgnoreWarnings && (Details?.EmbeddedTextures?.Values.Any(t => t.Details?.IsOptimizeNeeded == true && !t.IsOptimizedDuringBuild) ?? false);
 
     private DuplicateInfo _duplicateInfo = new();
     [JsonIgnore]
@@ -512,6 +546,9 @@ public class GDrawable : INotifyPropertyChanged
                 var result = await LoadDrawableDetailsWithConcurrencyControl();
                 if (result != null)
                 {
+                        // Keep replacement/rename/optimization state from the save file - the
+                        // freshly scanned details only know what is inside the .ydd itself.
+                        result.RestorePersistedEmbeddedState(_details);
                         Details = result;
                         OnPropertyChanged(nameof(Details));
                 }
@@ -578,6 +615,8 @@ public class GDrawable : INotifyPropertyChanged
         var reserved = new GDrawableReserved(Sex, IsProp, TypeNumeric, Number);
         var index = MainWindow.AddonManager.SelectedAddon.Drawables.IndexOf(this);
 
+        DuplicateDetector.UnregisterDrawable(this);
+
         // change drawable to new type
         TypeNumeric = newTypeNumeric;
 
@@ -596,6 +635,8 @@ public class GDrawable : INotifyPropertyChanged
         var reserved = new GDrawableReserved(Sex, IsProp, TypeNumeric, Number);
         var index = MainWindow.AddonManager.SelectedAddon.Drawables.IndexOf(this);
     
+        DuplicateDetector.UnregisterDrawable(this);
+
         // change drawable sex
         Sex = newSexEnum;
 
@@ -630,8 +671,7 @@ public class GDrawable : INotifyPropertyChanged
             return;
         }
 
-        Details.TexturesCount = Textures.Count;
-        Details.Validate(Textures);
+        ValidateDetails();
         
         OnPropertyChanged(nameof(HasTexturesNeedingOptimization));
     }
@@ -647,7 +687,7 @@ public class GDrawable : INotifyPropertyChanged
     {
         if (e.PropertyName == nameof(GTexture.TxtDetails) && Details != null)
         {
-            Details.Validate(Textures);
+            ValidateDetails();
             OnPropertyChanged(nameof(HasTexturesNeedingOptimization));
         }
         
@@ -662,8 +702,20 @@ public class GDrawable : INotifyPropertyChanged
         if (e.PropertyName == nameof(GTextureEmbedded.IsOptimizedDuringBuild) || 
             e.PropertyName == nameof(GTextureEmbedded.Details))
         {
+            ValidateDetails();
             OnPropertyChanged(nameof(HasEmbeddedTexturesNeedingOptimization));
         }
+    }
+
+    public void ValidateDetails()
+    {
+        if (Details == null)
+        {
+            return;
+        }
+
+        Details.TexturesCount = Textures.Count;
+        Details.Validate(Textures, EnableHighHeels, HighHeelsValue, IgnoreWarnings);
     }
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -804,7 +856,7 @@ public class GDrawable : INotifyPropertyChanged
                 _ => null
             };
 
-            details.EmbeddedTextures[txtType] = new GTextureEmbedded(texture, txtType.ToString());
+            details.EmbeddedTextures[txtType] = new GTextureEmbedded(texture, txtType.ToString(), FullFilePath);
         }
 
         var drawableModels = yddFile.Drawables.First().DrawableModels;
@@ -827,9 +879,75 @@ public class GDrawable : INotifyPropertyChanged
             }
         }
 
+        if (!IsProp && TypeNumeric == 6)
+        {
+            try
+            {
+                details.ShouldCheckHighHeels = ShouldCheckHighHeels(drawableModels);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Could not estimate High heels value for '{Name}': {ex.Message}", Views.LogType.Warning);
+            }
+        }
+
         details.TexturesCount = Textures.Count;
 
-        details.Validate(Textures);
+        details.Validate(Textures, EnableHighHeels, HighHeelsValue, IgnoreWarnings);
         return details;
+    }
+
+    private static bool ShouldCheckHighHeels(DrawableModelsBlock drawableModels)
+    {
+        const float defaultFloorZ = -1.0f;
+        const float minimumNoticeableOffset = 0.02f;
+
+        var models = drawableModels?.High ?? drawableModels?.Med ?? drawableModels?.Low;
+        if (models == null)
+        {
+            return false;
+        }
+
+        var estimatedBottomZ = float.MaxValue;
+        foreach (var model in models)
+        {
+            if (model == null)
+            {
+                continue;
+            }
+
+            if (model.Geometries != null)
+            {
+                foreach (var geom in model.Geometries)
+                {
+                    if (geom?.VertexData != null && geom.VertexData.VertexCount > 0)
+                    {
+                        for (var v = 0; v < geom.VertexData.VertexCount; v++)
+                        {
+                            estimatedBottomZ = Math.Min(estimatedBottomZ, geom.VertexData.GetVector3(v, 0).Z);
+                        }
+                    }
+                    else
+                    {
+                        estimatedBottomZ = Math.Min(estimatedBottomZ, geom?.AABB.Min.Z ?? float.MaxValue);
+                    }
+                }
+            }
+            else if (model.BoundsData != null && model.BoundsData.Length > 0)
+            {
+                foreach (var bounds in model.BoundsData)
+                {
+                    estimatedBottomZ = Math.Min(estimatedBottomZ, bounds.Min.Z);
+                }
+            }
+        }
+
+        if (estimatedBottomZ == float.MaxValue)
+        {
+            return false;
+        }
+
+        var requiredPreviewOffset = defaultFloorZ - estimatedBottomZ;
+        return requiredPreviewOffset >= minimumNoticeableOffset;
     }
 }

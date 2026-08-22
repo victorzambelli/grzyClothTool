@@ -142,5 +142,29 @@ namespace grzyClothTool.Properties {
                 this["TextureResolutionLimitSpecular"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("2")]
+        public int DrawableGroupingMode {
+            get {
+                return ((int)(this["DrawableGroupingMode"]));
+            }
+            set {
+                this["DrawableGroupingMode"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("255")]
+        public int MaxDrawablesPerAddon {
+            get {
+                return ((int)(this["MaxDrawablesPerAddon"]));
+            }
+            set {
+                this["MaxDrawablesPerAddon"] = value;
+            }
+        }
     }
 }

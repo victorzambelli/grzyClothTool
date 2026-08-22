@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -269,7 +270,7 @@ public static class FileHelper
         }
     }
 
-    public static async Task<GDrawable> CreateDrawableAsync(string filePath, Enums.SexType sex, bool isProp, int typeNumber, int countOfType)
+    public static async Task<GDrawable> CreateDrawableAsync(string filePath, Enums.SexType sex, bool isProp, int typeNumber, int countOfType, bool useFolderCache = false)
     {
         var isReserved = await IsReservedDrawable(filePath);
         if (isReserved)
@@ -279,7 +280,7 @@ public static class FileHelper
 
         var name = EnumHelper.GetName(typeNumber, isProp);
 
-        var matchingTextures = FindMatchingTextures(filePath, name, isProp);
+        var matchingTextures = FindMatchingTextures(filePath, name, isProp, useFolderCache);
 
         var drawableGuid = Guid.NewGuid();
         var drawableRaceSuffix = Path.GetFileNameWithoutExtension(filePath)[^1..];
@@ -339,11 +340,12 @@ public static class FileHelper
         return drawable;
     }
 
-    public static async Task CopyAsync(string sourcePath, string destinationPath)
+    public static Task CopyAsync(string sourcePath, string destinationPath)
     {
-        using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var destinationStream = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        await sourceStream.CopyToAsync(destinationStream);
+        // File.Copy uses the OS fast-path (CopyFileEx) which is dramatically faster than
+        // streaming with small buffers. overwrite: false preserves the previous
+        // FileMode.CreateNew behavior (throws IOException if destination exists).
+        return Task.Run(() => File.Copy(sourcePath, destinationPath, overwrite: false));
     }
 
     /// <summary>
@@ -369,7 +371,15 @@ public static class FileHelper
         }
     }
 
-    public static List<string> FindMatchingTextures(string filePath, string name, bool isProp)
+    /// <summary>
+    /// Per-folder cache of .ytd file paths, used during batch drawable imports so each folder
+    /// is enumerated once instead of once per drawable. Cleared after every batch.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, string[]> _ytdFolderCache = new(StringComparer.OrdinalIgnoreCase);
+
+    public static void ClearTextureSearchCache() => _ytdFolderCache.Clear();
+
+    public static List<string> FindMatchingTextures(string filePath, string name, bool isProp, bool useFolderCache = false)
     {
         var folderPath = Path.GetDirectoryName(filePath);
         var fileName = Path.GetFileName(filePath);
@@ -402,15 +412,24 @@ public static class FileHelper
             regexToSearch = $"^{Regex.Escape(addonName)}\\^{regexToSearch.TrimStart('^')}";
         }
 
-        var allYtds = Directory.EnumerateFiles(folderPath)
-            .Where(x => Path.GetExtension(x) == ".ytd" &&
-                Regex.IsMatch(Path.GetFileNameWithoutExtension(x), regexToSearch, RegexOptions.IgnoreCase))
-            .ToList();
+        static string[] EnumerateYtds(string path) => Directory.EnumerateFiles(path)
+            .Where(x => Path.GetExtension(x).Equals(".ytd", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
-        return allYtds;
+        var ytds = useFolderCache
+            ? _ytdFolderCache.GetOrAdd(folderPath, EnumerateYtds)
+            : EnumerateYtds(folderPath);
+
+        // One regex instance for the whole folder scan; the static Regex.IsMatch cache is small
+        // and every drawable uses a different pattern, so it constantly missed during batch imports.
+        var regex = new Regex(regexToSearch, RegexOptions.IgnoreCase);
+
+        return ytds
+            .Where(x => regex.IsMatch(Path.GetFileNameWithoutExtension(x)))
+            .ToList();
     }
 
-    public static async Task<(bool, int)> ResolveDrawableType(string file)
+    public static (bool IsProp, int DrawableType)? TryResolveDrawableTypeFromFileName(string file)
     {
         string fileName = Path.GetFileNameWithoutExtension(file);
         if (fileName.Contains('^'))
@@ -436,23 +455,58 @@ public static class FileHelper
             return (true, value);
         }
 
+        return null;
+    }
+
+    public static async Task<Dictionary<string, (bool IsProp, int DrawableType)>> ResolveDrawableTypes(IEnumerable<string> files)
+    {
+        var resolvedTypes = new Dictionary<string, (bool IsProp, int DrawableType)>();
+        var unresolvedFiles = new List<string>();
+
+        foreach (var file in files)
+        {
+            var resolved = TryResolveDrawableTypeFromFileName(file);
+            if (resolved.HasValue)
+            {
+                resolvedTypes[file] = resolved.Value;
+            }
+            else
+            {
+                unresolvedFiles.Add(file);
+            }
+        }
+
+        if (unresolvedFiles.Count == 0)
+        {
+            return resolvedTypes;
+        }
+
         return await Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            var window = new DrawableSelectWindow(file);
+            var detectedTypes = unresolvedFiles.ToDictionary(
+                file => file,
+                _ => ((bool IsProp, int DrawableType)?)null);
+            var window = new DrawableImportResolveWindow(
+                unresolvedFiles,
+                detectedDrawableTypes: detectedTypes,
+                showDrawableProperties: true);
+
             var result = window.ShowDialog();
             if (result == true)
             {
-                var value = EnumHelper.GetValue(window.SelectedDrawableType, window.IsProp);
-                return (window.IsProp, value);
+                foreach (var selection in window.SelectedDrawableTypes)
+                {
+                    resolvedTypes[selection.Key] = selection.Value;
+                }
             }
 
-            return (false, -1);
+            return resolvedTypes;
         });
     }
 
     public static int? GetDrawableNumberFromFileName(string fileName)
     {
-        Regex numberRegex = new(@"_(\d{3})_([a-zA-Z])(?:_\d+)?\.(yld|ydd)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        Regex numberRegex = new(@"_(\d{3})(?:_([a-zA-Z])(?:_\d+)?)?\.(yld|ydd)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         Match match = numberRegex.Match(fileName);
 
         if (match.Success)
@@ -493,10 +547,30 @@ public static class FileHelper
              
             if (fileExtension == ".ytd") 
             {
-                // For YTD, simply copy the file
                 try
                 {
-                    await CopyAsync(texture.FullFilePath, filePath);
+                    byte[] textureBytes;
+
+                    if (texture.IsOptimizedDuringBuild)
+                    {
+                        textureBytes = await ImgHelper.Optimize(texture);
+                    }
+                    else if (string.Equals(texture.Extension, ".ytd", StringComparison.OrdinalIgnoreCase))
+                    {
+                        textureBytes = await ReadAllBytesAsync(texture.FullFilePath);
+                    }
+                    else
+                    {
+                        textureBytes = ImgHelper.GetDDSBytes(texture);
+                    }
+
+                    if (textureBytes == null)
+                    {
+                        LogHelper.Log($"Could not save texture: {texture.DisplayName}. Error: Texture is corrupted.", LogType.Error);
+                        return;
+                    }
+
+                    await File.WriteAllBytesAsync(filePath, textureBytes);
                     successfulExports++;
                 } 
                 catch (Exception ex)
@@ -505,12 +579,30 @@ public static class FileHelper
                     LogHelper.Log($"Could not save texture: {texture.DisplayName}. Error: {ex.Message}.", LogType.Error);
                 } 
             }
+            else if (fileExtension == ".dds")
+            {
+                try
+                {
+                    byte[] textureBytes = ImgHelper.GetDDSFileBytes(texture);
+                    if (textureBytes.Length == 0)
+                    {
+                        LogHelper.Log($"Could not save texture: {texture.DisplayName}. Error: Texture is empty.", LogType.Error);
+                        return;
+                    }
+
+                    await File.WriteAllBytesAsync(filePath, textureBytes);
+                    successfulExports++;
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.Log($"Could not save texture: {texture.DisplayName}. Error: {ex.Message}.", LogType.Error);
+                }
+            }
             else
             {
                 using var image = ImgHelper.GetImage(texture.FullFilePath);
                 image.Format = format.ToUpper() switch
                 {
-                    "DDS" => MagickFormat.Dds,
                     "PNG" => MagickFormat.Png,
                     _ => throw new ArgumentException($"Unsupported format for MagickImage: {format}", nameof(format))
                 };
@@ -528,9 +620,106 @@ public static class FileHelper
             }
         });
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+            ProgressHelper.Stop($"Exported {successfulExports} texture(s) in {{0}}", true);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Texture export failed: {ex.Message}", LogType.Error);
+            ProgressHelper.Stop("Texture export failed", false);
+        }
+    }
 
-        ProgressHelper.Stop($"Exported {successfulExports} texture(s) in {{0}}", true);
+    /// <summary>
+    /// Exports embedded (in-drawable) textures to a folder as DDS or PNG. Unlike normal textures
+    /// these have no source file on disk - the pixel data lives inside the parent YDD, so the
+    /// data is loaded on demand and converted straight from the in-memory texture.
+    /// </summary>
+    public static async Task SaveEmbeddedTexturesAsync(List<GTextureEmbedded> textures, string folderPath, string format)
+    {
+        Directory.CreateDirectory(folderPath);
+
+        string fileExtension = format.ToUpperInvariant() switch
+        {
+            "DDS" => ".dds",
+            "PNG" => ".png",
+            _ => throw new ArgumentException($"Unsupported format: {format}", nameof(format))
+        };
+
+        ProgressHelper.Start("Started exporting embedded textures");
+
+        int successfulExports = 0;
+
+        try
+        {
+            foreach (var texture in textures)
+            {
+                var textureName = texture.Details?.Name ?? texture.OriginalName ?? "embedded_texture";
+
+                try
+                {
+                    var loaded = await texture.EnsureTextureDataLoadedAsync();
+                    var textureData = texture.DisplayTextureData;
+
+                    if (!loaded || textureData?.Data?.FullData == null || textureData.Data.FullData.Length == 0)
+                    {
+                        LogHelper.Log($"Could not export embedded texture: {textureName}. Error: no texture data available (missing or encrypted).", LogType.Error);
+                        continue;
+                    }
+
+                    var baseName = RemoveInvalidFileNameChars(textureName);
+                    var filePath = GetAvailableFilePath(folderPath, baseName, fileExtension);
+
+                    var ddsBytes = CodeWalker.Utils.DDSIO.GetDDSFile(textureData);
+
+                    if (fileExtension == ".dds")
+                    {
+                        await File.WriteAllBytesAsync(filePath, ddsBytes);
+                    }
+                    else
+                    {
+                        using var image = new MagickImage(ddsBytes) { Format = MagickFormat.Png };
+                        await File.WriteAllBytesAsync(filePath, image.ToByteArray());
+                    }
+
+                    successfulExports++;
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.Log($"Could not export embedded texture: {textureName}. Error: {ex.Message}.", LogType.Error);
+                }
+            }
+
+            ProgressHelper.Stop($"Exported {successfulExports} embedded texture(s) in {{0}}", true);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Embedded texture export failed: {ex.Message}", LogType.Error);
+            ProgressHelper.Stop("Embedded texture export failed", false);
+        }
+    }
+
+    private static string RemoveInvalidFileNameChars(string name)
+    {
+        return string.Concat(name.Split(Path.GetInvalidFileNameChars()));
+    }
+
+    /// <summary>
+    /// Returns a file path in <paramref name="folderPath"/> for the given base name and extension,
+    /// appending a numeric suffix if a file with that name already exists.
+    /// </summary>
+    private static string GetAvailableFilePath(string folderPath, string baseName, string extension)
+    {
+        var candidate = Path.Combine(folderPath, $"{baseName}{extension}");
+        int counter = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.Combine(folderPath, $"{baseName}_{counter}{extension}");
+            counter++;
+        }
+        return candidate;
     }
 
     public static async Task SaveDrawablesAsync(List<GDrawable> drawables, string folderPath)
@@ -564,8 +753,15 @@ public static class FileHelper
             }
         });
 
-        await Task.WhenAll(tasks);
-
-        ProgressHelper.Stop($"Exported {successfulExports} drawable(s) in {{0}}", true);
+        try
+        {
+            await Task.WhenAll(tasks);
+            ProgressHelper.Stop($"Exported {successfulExports} drawable(s) in {{0}}", true);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Drawable export failed: {ex.Message}", LogType.Error);
+            ProgressHelper.Stop("Drawable export failed", false);
+        }
     }
 }

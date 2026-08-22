@@ -48,7 +48,7 @@ namespace grzyClothTool.Controls
         public event EventHandler<DrawableUpdatedArgs> SelectedDrawableUpdated;
 
         public static readonly DependencyProperty SelectedDrawableProperty =
-        DependencyProperty.RegisterAttached("SelectedDraw", typeof(GDrawable), typeof(SelectedDrawable), new PropertyMetadata(default(GDrawable)));
+        DependencyProperty.RegisterAttached("SelectedDraw", typeof(GDrawable), typeof(SelectedDrawable), new PropertyMetadata(default(GDrawable), OnSelectedDrawChanged));
 
         public static readonly DependencyProperty SelectedDrawablesProperty = 
             DependencyProperty.RegisterAttached("SelectedDrawables", typeof(ObservableCollection<GDrawable>), typeof(SelectedDrawable), new PropertyMetadata(default(ObservableCollection<GDrawable>)));
@@ -96,10 +96,39 @@ namespace grzyClothTool.Controls
         // Ghost line adorner for texture drag and drop
         private AdornerLayer _textureAdornerLayer;
         private GhostLineAdorner _textureGhostLineAdorner;
+        private bool _isEmbeddedTexturesTabSelected;
 
         public SelectedDrawable()
         {
             InitializeComponent();
+        }
+
+        private static void OnSelectedDrawChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is not SelectedDrawable control)
+            {
+                return;
+            }
+
+            if (e.OldValue is GDrawable oldDrawable)
+            {
+                oldDrawable.PropertyChanged -= control.SelectedDraw_PropertyChanged;
+            }
+
+            if (e.NewValue is GDrawable newDrawable)
+            {
+                newDrawable.PropertyChanged += control.SelectedDraw_PropertyChanged;
+            }
+
+            control.Dispatcher.BeginInvoke(new Action(control.LoadVisibleEmbeddedTextureThumbnails));
+        }
+
+        private void SelectedDraw_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(GDrawable.Details))
+            {
+                Dispatcher.BeginInvoke(new Action(LoadVisibleEmbeddedTextureThumbnails));
+            }
         }
 
         private void TextureListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -224,7 +253,7 @@ namespace grzyClothTool.Controls
 
         }
 
-        private void EmbeddedTexturePreview_Click(object sender, RoutedEventArgs e)
+        private async void EmbeddedTexturePreview_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -232,6 +261,8 @@ namespace grzyClothTool.Controls
 
                 if (btn.DataContext is not GTextureEmbedded embeddedTexture)
                     return;
+
+                await embeddedTexture.EnsureTextureDataLoadedAsync();
 
                 var textureData = embeddedTexture.DisplayTextureData;
                 if (textureData?.Data?.FullData == null || textureData.Data.FullData.Length == 0)
@@ -1059,6 +1090,7 @@ namespace grzyClothTool.Controls
                 // Replace reserved drawable with new drawable
                 var index = MainWindow.AddonManager.SelectedAddon.Drawables.IndexOf(SelectedDraw);
                 MainWindow.AddonManager.SelectedAddon.Drawables[index] = newDrawable;
+                DuplicateDetector.RegisterDrawable(newDrawable);
                 SaveHelper.SetUnsavedChanges(true);
             }
         }
@@ -1166,7 +1198,7 @@ namespace grzyClothTool.Controls
             
             if (menuItem.DataContext is GTextureEmbedded embeddedTexture)
             {
-                if (embeddedTexture?.TextureData == null)
+                if (embeddedTexture?.HasOriginalTexture != true)
                     return;
 
                 if (embeddedTexture.IsOptimizedDuringBuild)
@@ -1184,7 +1216,7 @@ namespace grzyClothTool.Controls
 
             var embeddedTextureEntry = menuItem.DataContext as KeyValuePair<GDrawableDetails.EmbeddedTextureType, GTextureEmbedded>?;
             
-            if (!embeddedTextureEntry.HasValue || embeddedTextureEntry.Value.Value?.TextureData == null)
+            if (!embeddedTextureEntry.HasValue || embeddedTextureEntry.Value.Value?.HasOriginalTexture != true)
                 return;
 
             var texture = embeddedTextureEntry.Value.Value;
@@ -1199,6 +1231,73 @@ namespace grzyClothTool.Controls
             }
 
             SaveHelper.SetUnsavedChanges(true);
+        }
+
+        private async void ExportEmbeddedTexture_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem menuItem)
+            {
+                return;
+            }
+
+            var format = menuItem.Tag?.ToString();
+            if (string.IsNullOrWhiteSpace(format))
+            {
+                return;
+            }
+
+            var embeddedTexture = GetEmbeddedTextureFromMenuItem(menuItem);
+            if (embeddedTexture == null)
+            {
+                return;
+            }
+
+            // Missing embedded textures (no original data and no replacement) have nothing to export
+            if (!embeddedTexture.HasOriginalTexture && !embeddedTexture.HasReplacement)
+            {
+                Show("This embedded texture is missing, so there is no image data to export.", "Nothing to export", CustomMessageBoxButtons.OKOnly, CustomMessageBoxIcon.Warning);
+                return;
+            }
+
+            OpenFolderDialog folder = new()
+            {
+                Title = $"Select the folder to export embedded texture as {format.ToUpperInvariant()}",
+                Multiselect = false
+            };
+
+            if (folder.ShowDialog() != true)
+            {
+                return;
+            }
+
+            try
+            {
+                await FileHelper.SaveEmbeddedTexturesAsync([embeddedTexture], folder.FolderName, format);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Failed to export embedded texture: {ex.Message}", LogType.Error);
+                Show($"An error occurred during export: {ex.Message}", "Export Error", CustomMessageBoxButtons.OKOnly, CustomMessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Resolves the <see cref="GTextureEmbedded"/> a context-menu item was opened on, supporting
+        /// both a direct binding and the legacy KeyValuePair binding.
+        /// </summary>
+        private static GTextureEmbedded GetEmbeddedTextureFromMenuItem(MenuItem menuItem)
+        {
+            if (menuItem.DataContext is GTextureEmbedded embeddedTexture)
+            {
+                return embeddedTexture;
+            }
+
+            if (menuItem.DataContext is KeyValuePair<GDrawableDetails.EmbeddedTextureType, GTextureEmbedded> entry)
+            {
+                return entry.Value;
+            }
+
+            return null;
         }
 
         private void OptimizeEmbeddedTexture(GTextureEmbedded embeddedTexture)
@@ -1235,7 +1334,7 @@ namespace grzyClothTool.Controls
             
             if (menuItem.DataContext is GTextureEmbedded embeddedTexture)
             {
-                if (embeddedTexture?.TextureData == null)
+                if (embeddedTexture?.HasOriginalTexture != true)
                     return;
 
                 var (result, textBoxValue) = Show("Rename Embedded Texture", "Enter new name:", CustomMessageBoxButtons.OKCancel, CustomMessageBoxIcon.None, true);
@@ -1248,7 +1347,7 @@ namespace grzyClothTool.Controls
 
             var embeddedTextureEntry = menuItem.DataContext as KeyValuePair<GDrawableDetails.EmbeddedTextureType, GTextureEmbedded>?;
             
-            if (!embeddedTextureEntry.HasValue || embeddedTextureEntry.Value.Value?.TextureData == null)
+            if (!embeddedTextureEntry.HasValue || embeddedTextureEntry.Value.Value?.HasOriginalTexture != true)
                 return;
 
             var texture = embeddedTextureEntry.Value.Value;
@@ -1259,18 +1358,15 @@ namespace grzyClothTool.Controls
             }
         }
 
-        private void ReplaceEmbeddedTexture_Click(object sender, RoutedEventArgs e)
+        private async void ReplaceEmbeddedTexture_Click(object sender, RoutedEventArgs e)
         {
             MenuItem menuItem = sender as MenuItem;
-            
+
             GTextureEmbedded embeddedTexture = null;
             GDrawableDetails.EmbeddedTextureType textureType = GDrawableDetails.EmbeddedTextureType.Normal;
 
             if (menuItem.DataContext is GTextureEmbedded texture)
             {
-                if (texture?.TextureData == null)
-                    return;
-                    
                 embeddedTexture = texture;
                 if (Enum.TryParse<GDrawableDetails.EmbeddedTextureType>(texture.Details.Type, out var parsedType))
                 {
@@ -1302,8 +1398,12 @@ namespace grzyClothTool.Controls
                 try
                 {
                     var newTextureData = LoadTextureAsEmbedded(file.FileName, textureType.ToString());
-                    
-                    embeddedTexture.SetReplacementTexture(newTextureData);
+
+                    // Copy the chosen image into project assets and persist its relative path, so the
+                    // replacement survives save/load and is applied during build (not just this session).
+                    var relativePath = await FileHelper.CopyToProjectAssetsAsync(file.FileName, Guid.NewGuid().ToString());
+
+                    embeddedTexture.SetReplacementTexture(newTextureData, relativePath);
 
                     SaveHelper.SetUnsavedChanges(true);
                     LogHelper.Log($"Embedded {textureType} texture replaced (optimization cleared)", LogType.Info);
@@ -1318,6 +1418,13 @@ namespace grzyClothTool.Controls
 
         private CodeWalker.GameFiles.Texture LoadTextureAsEmbedded(string filePath, string textureType)
         {
+            if (string.Equals(Path.GetExtension(filePath), ".dds", StringComparison.OrdinalIgnoreCase))
+            {
+                var ddsTxt = DDSIO.GetTexture(File.ReadAllBytes(filePath));
+                ddsTxt.Name = Path.GetFileNameWithoutExtension(filePath);
+                return ddsTxt;
+            }
+
             var img = ImgHelper.GetImage(filePath);
             if (img == null)
             {
@@ -1431,11 +1538,30 @@ namespace grzyClothTool.Controls
         private void TexturesTab_Click(object sender, MouseButtonEventArgs e)
         {
             SwitchToTab(isTextures: true, sender);
+            _isEmbeddedTexturesTabSelected = false;
         }
 
         private void EmbeddedTexturesTab_Click(object sender, MouseButtonEventArgs e)
         {
             SwitchToTab(isTextures: false, sender);
+            _isEmbeddedTexturesTabSelected = true;
+            LoadVisibleEmbeddedTextureThumbnails();
+        }
+
+        private void LoadVisibleEmbeddedTextureThumbnails()
+        {
+            if (!_isEmbeddedTexturesTabSelected)
+            {
+                return;
+            }
+
+            var embeddedTextures = SelectedDraw?.Details?.EmbeddedTextures?.Values
+                ?? Enumerable.Empty<GTextureEmbedded>();
+
+            foreach (var embeddedTexture in embeddedTextures)
+            {
+                embeddedTexture?.LoadThumbnailAsync();
+            }
         }
 
         private void SwitchToTab(bool isTextures, object sender)

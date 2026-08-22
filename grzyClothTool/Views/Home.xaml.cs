@@ -355,6 +355,9 @@ namespace grzyClothTool.Views
                 MainWindow.AddonManager.IsExternalProject = isExternal;
                 MainWindow.AddonManager.CreateAddon();
 
+                SaveHelper.SetUnsavedChanges(true);
+                await SaveHelper.SaveAsync();
+
                 var saveFileName = SaveHelper.GetSaveFileName(isExternal);
                 var newProjectAutoSavePath = Path.Combine(projectFolder, saveFileName);
                 PersistentSettingsHelper.Instance.AddRecentProject(
@@ -521,6 +524,13 @@ namespace grzyClothTool.Views
                         File.Delete(saveFile);
                         LogHelper.Log($"Deleted old save file: {saveFile}");
                     }
+                }
+
+                var backupFolder = Path.Combine(projectFolder, "save-backups");
+                if (Directory.Exists(backupFolder))
+                {
+                    Directory.Delete(backupFolder, recursive: true);
+                    LogHelper.Log($"Deleted old save backups folder: {backupFolder}");
                 }
 
                 var assetsFolder = Path.Combine(projectFolder, GlobalConstants.ASSETS_FOLDER_NAME);

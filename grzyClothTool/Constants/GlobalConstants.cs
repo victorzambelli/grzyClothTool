@@ -1,10 +1,17 @@
+using grzyClothTool.Helpers;
 using System;
 
 namespace grzyClothTool.Constants;
 
 public static class GlobalConstants
 {
-    public const int MAX_DRAWABLES_IN_ADDON = 128; //todo: somewhere in the future, this should depend on a resource type (fivem has limit of 128, but sp and ragemp have 255 I believe)
+    // Highest drawable number the game supports; numbering is 0-based (000-255).
+    public const int MAX_DRAWABLE_NUMBER_LIMIT = 255;
+
+    // Capacity of one addon. The user setting is the highest allowed drawable number,
+    // so the count is that number + 1 (setting 255 -> numbers 000-255 -> 256 drawables).
+    public static int MAX_DRAWABLES_IN_ADDON => SettingsHelper.Instance.MaxDrawableNumber + 1;
+
     public const int MAX_DRAWABLE_TEXTURES = 26;
     public const string ASSETS_FOLDER_NAME = "project_assets";
     public static readonly Uri DISCORD_INVITE_URL = new("https://discord.gg/HCQutNhxWt");

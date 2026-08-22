@@ -86,13 +86,69 @@ public class GDrawableDetails : INotifyPropertyChanged
         }
     }
 
-    public void Validate(ObservableCollection<GTexture>? textures = null)
+    private bool _hasHighHeelsWarning;
+    public bool HasHighHeelsWarning
+    {
+        get => _hasHighHeelsWarning;
+        set
+        {
+            _hasHighHeelsWarning = value;
+            OnPropertyChanged(nameof(HasHighHeelsWarning));
+        }
+    }
+
+    public bool ShouldCheckHighHeels { get; set; }
+
+    public void RestorePersistedEmbeddedState(GDrawableDetails? previous)
+    {
+        if (previous?.EmbeddedTextures == null || EmbeddedTextures == null)
+        {
+            return;
+        }
+
+        foreach (var (type, persisted) in previous.EmbeddedTextures)
+        {
+            if (persisted == null || !EmbeddedTextures.TryGetValue(type, out var rebuilt) || rebuilt == null)
+            {
+                continue;
+            }
+
+            rebuilt.IsOptimizedDuringBuild = persisted.IsOptimizedDuringBuild;
+            rebuilt.OptimizeDetails = persisted.OptimizeDetails;
+
+            if (!string.IsNullOrEmpty(persisted.ReplacementFilePath))
+            {
+                // The persisted Details describe the replacement image (name, size, format),
+                // so restore them wholesale together with the path.
+                rebuilt.ReplacementFilePath = persisted.ReplacementFilePath;
+                if (!string.IsNullOrEmpty(persisted.Details?.Name))
+                {
+                    rebuilt.Details = persisted.Details;
+                }
+            }
+            else if (rebuilt.HasOriginalTexture
+                     && !string.IsNullOrEmpty(persisted.Details?.Name)
+                     && persisted.Details.Name != rebuilt.Details.Name
+                     && persisted.OriginalName == rebuilt.OriginalName)
+            {
+                // A rename (Details.Name differing from the name inside the .ydd) must survive too.
+                rebuilt.Details.Name = persisted.Details.Name;
+            }
+        }
+    }
+
+    public void Validate(
+        ObservableCollection<GTexture>? textures = null,
+        bool enableHighHeels = false,
+        float highHeelsValue = 0,
+        bool ignoreWarnings = false)
     {
         // reset values
         Tooltip = string.Empty;
         IsWarning = false;
         HasTextureWarnings = false;
         HasEmbeddedTextureWarnings = false;
+        HasHighHeelsWarning = false;
 
         foreach (var detailLevel in AllModels.Keys)
         {
@@ -122,7 +178,7 @@ public class GDrawableDetails : INotifyPropertyChanged
         foreach (var key in EmbeddedTextures.Keys)
         {
             var txt = EmbeddedTextures[key];
-            if (txt == null || txt.TextureData == null)
+            if (txt == null || !txt.HasOriginalTexture)
             {
                 IsWarning = true;
                 Tooltip += $"Missing {key} texture.\n";
@@ -155,7 +211,7 @@ public class GDrawableDetails : INotifyPropertyChanged
         }
         
         var embeddedTexturesWithWarnings = EmbeddedTextures.Values
-            .Where(et => et != null && et.TextureData != null && et.Details.IsOptimizeNeeded)
+            .Where(et => et != null && et.HasOriginalTexture && et.Details.IsOptimizeNeeded)
             .Any();
             
         if (embeddedTexturesWithWarnings)
@@ -169,8 +225,24 @@ public class GDrawableDetails : INotifyPropertyChanged
             IsWarning = true;
         }
 
+        if (ShouldCheckHighHeels && !enableHighHeels)
+        {
+            HasHighHeelsWarning = true;
+            IsWarning = true;
+            Tooltip += "Shoes might be under floor. Consider enabling High heels and validating manually in the 3D preview.\n";
+        }
+
         // Remove trailing newline character
         Tooltip = Tooltip.TrimEnd('\n');
+
+        if (ignoreWarnings && IsWarning)
+        {
+            Tooltip = string.Empty;
+            IsWarning = false;
+            HasTextureWarnings = false;
+            HasEmbeddedTextureWarnings = false;
+            HasHighHeelsWarning = false;
+        }
     }
 
     public void OnPropertyChanged(string propertyName)

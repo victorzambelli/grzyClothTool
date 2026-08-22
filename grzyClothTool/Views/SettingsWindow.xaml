@@ -6,11 +6,16 @@
              xmlns:local="clr-namespace:grzyClothTool.Views"
              xmlns:icons="clr-namespace:Material.Icons.WPF;assembly=Material.Icons.WPF"
              xmlns:helpers="clr-namespace:grzyClothTool.Helpers"
+             xmlns:converters="clr-namespace:grzyClothTool.Converters"
+             xmlns:enums="clr-namespace:grzyClothTool"
              xmlns:c="clr-namespace:grzyClothTool.Controls"
              mc:Ignorable="d" 
              d:DesignHeight="550" d:DesignWidth="800"
              d:Background="{DynamicResource Brush50}">
     <Grid>
+        <Grid.Resources>
+            <converters:EnumToBoolConverter x:Key="EnumToBoolConverter" />
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="50" />
             <RowDefinition Height="*" />
@@ -145,6 +150,37 @@
                                     <c:SettingsLabelComboBox Grid.Row="1" Grid.Column="1" Label="Normal" LabelFontSize="12" ItemsSource="{Binding TextureResolutionOptions}" SelectedItem="{Binding Path=Instance.TextureResolutionLimitNormal, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" />
                                     <c:SettingsLabelComboBox Grid.Row="1" Grid.Column="2" Label="Specular" LabelFontSize="12" ItemsSource="{Binding TextureResolutionOptions}" SelectedItem="{Binding Path=Instance.TextureResolutionLimitSpecular, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay}" />
                                 </Grid>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,5" Style="{DynamicResource FixedGroupBox}">
+                                <GroupBox.Header>
+                                    <TextBlock FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Brush950}" Text="Drawable list grouping" />
+                                </GroupBox.Header>
+                                <StackPanel Margin="5">
+                                    <TextBlock Padding="5,2,5,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Controls the section headers shown in the drawable list.</TextBlock>
+                                    <RadioButton Margin="5,3" Foreground="{DynamicResource Brush950}" Content="None - one flat list, no sections"
+                                        GroupName="GroupingMode"
+                                        IsChecked="{Binding Path=Instance.DrawableGroupingMode, Source={x:Static helpers:SettingsHelper.Instance}, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=None, Mode=TwoWay}" />
+                                    <RadioButton Margin="5,3" Foreground="{DynamicResource Brush950}" Content="By Type - sections for clothing or prop type"
+                                        GroupName="GroupingMode"
+                                        IsChecked="{Binding Path=Instance.DrawableGroupingMode, Source={x:Static helpers:SettingsHelper.Instance}, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=ByType, Mode=TwoWay}" />
+                                    <RadioButton Margin="5,3" Foreground="{DynamicResource Brush950}" Content="By Group - sections for your custom groups"
+                                        GroupName="GroupingMode"
+                                        IsChecked="{Binding Path=Instance.DrawableGroupingMode, Source={x:Static helpers:SettingsHelper.Instance}, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=GroupDefined, Mode=TwoWay}" />
+                                    <RadioButton Margin="5,3" Foreground="{DynamicResource Brush950}" Content="Both - custom groups first, types inside"
+                                        GroupName="GroupingMode"
+                                        IsChecked="{Binding Path=Instance.DrawableGroupingMode, Source={x:Static helpers:SettingsHelper.Instance}, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=Both, Mode=TwoWay}" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Margin="0,5" Height="150" Style="{DynamicResource FixedGroupBox}">
+                                <GroupBox.Header>
+                                    <TextBlock FontSize="15" FontWeight="Bold" Foreground="{DynamicResource Brush950}" Text="Drawables per addon" />
+                                </GroupBox.Header>
+                                <StackPanel Margin="5">
+                                    <TextBlock Padding="5,2,5,5" FontStyle="Italic" FontWeight="Normal" Foreground="{DynamicResource Brush500}" TextWrapping="Wrap">Maximum number of drawables of each type kept in a single addon before a new one is created. Changing this reorganizes existing addons.</TextBlock>
+                                    <c:SettingsLabelTextBox Margin="5" Label="Max drawable number per addon (0-255)" LabelFontSize="12" Text="{Binding Path=Instance.MaxDrawableNumber, Source={x:Static helpers:SettingsHelper.Instance}, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" ButtonVisible="False" />
+                                </StackPanel>
                             </GroupBox>
                         </StackPanel>
                         <StackPanel Margin="5" Grid.Column="1">

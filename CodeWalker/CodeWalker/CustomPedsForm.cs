@@ -104,6 +104,7 @@ namespace CodeWalker
         private List<string> CustomAnimationPaths = new List<string>();
         private Dictionary<string, YcdFile> CustomAnimations = new Dictionary<string, YcdFile>();
         private bool _suppressClipDictEvent = false;
+        private readonly HashSet<string> _hiddenComponentNodeNames = new HashSet<string>();
 
 
         private System.Windows.Forms.Timer autoRotateTimer;
@@ -338,7 +339,7 @@ namespace CodeWalker
             {
                 if (LoadedTextures.TryGetValue(drawable, out var texture))
                 {
-                    RenderSelectedItem(drawable, texture);
+                    TryRenderSelectedItem(drawable, texture);
                 }
             }
 
@@ -356,10 +357,34 @@ namespace CodeWalker
                         continue;
                     }
 
-                    RenderSelectedItem(drawable, SavedTextures[drawable]);
+                    TryRenderSelectedItem(drawable, SavedTextures[drawable]);
                 }
             }
         }
+
+        private void TryRenderSelectedItem(Drawable d, TextureDictionary t)
+        {
+            try
+            {
+                RenderSelectedItem(d, t);
+            }
+            catch (Exception ex)
+            {
+                LoadedTextures.Remove(d);
+                SavedTextures.Remove(d);
+
+                if (Renderer.SelDrawable == d)
+                {
+                    Renderer.SelDrawable = null;
+                    Renderer.SelectedDrawable = null;
+                    Renderer.renderfloor = false;
+                    Renderer.SelectedDrawableChanged = false;
+                }
+
+                LogError($"Skipped drawable '{d?.Name ?? "unknown"}' in 3D preview: {ex.Message}");
+            }
+        }
+
         private void RenderSelectedItem(Drawable d, TextureDictionary t)
         {
             // dirty hack to render drawable only when all other drawables are rendered, it fixes issue that props sometimes are not rendered attached to the head
@@ -370,7 +395,13 @@ namespace CodeWalker
 
             if(d.Skeleton == null || d.Skeleton.Bones == null || d.Skeleton.Bones.Items.Length == 0)
             {
-                d.Skeleton = SelectedPed.Skeleton.Clone();
+                var pedSkeleton = GetSelectedPedSkeleton();
+                if (pedSkeleton == null)
+                {
+                    return;
+                }
+
+                d.Skeleton = pedSkeleton.Clone();
             }
 
             if(liveTexturePath != null)
@@ -400,6 +431,29 @@ namespace CodeWalker
             }
 
             Renderer.RenderDrawable(d, null, SelectedPed.RenderEntity, 0, t, t.Textures.data_items[0], SelectedPed.AnimClip, null, null, isProp, true);
+        }
+
+        private Skeleton GetSelectedPedSkeleton()
+        {
+            if (SelectedPed?.Skeleton?.Bones?.Items != null)
+            {
+                return SelectedPed.Skeleton;
+            }
+
+            if (SelectedPed?.Drawables == null)
+            {
+                return null;
+            }
+
+            foreach (var drawable in SelectedPed.Drawables)
+            {
+                if (drawable?.Skeleton?.Bones?.Items != null)
+                {
+                    return drawable.Skeleton;
+                }
+            }
+
+            return null;
         }
 
         private void RenderFloor()
@@ -481,7 +535,8 @@ namespace CodeWalker
 
             MouseWheel += PedsForm_MouseWheel;
 
-            if (!GTAFolder.UpdateGTAFolder(true))
+  
+            if (!GTAFolder.IsCurrentGTAFolderValid())
             {
                 Close();
                 return;
@@ -732,6 +787,7 @@ namespace CodeWalker
                     {
                         foreach (var node in sameName)
                         {
+                            if (_hiddenComponentNodeNames.Contains(node.Text)) continue;
                             node.Checked = !node.Checked;
                         }
                     }
@@ -905,7 +961,7 @@ namespace CodeWalker
 
                     if (drawable != null)
                     {
-                        AddDrawableTreeNode(drawable, drawablename, true);
+                        AddDrawableTreeNode(drawable, drawablename, !_hiddenComponentNodeNames.Contains(drawablename));
                     }
                 }
             }
@@ -1017,8 +1073,8 @@ namespace CodeWalker
             {
                 return Convert.ToInt32(settings[index]);
             }
-            return 0;
-        }
+                return 0;
+            }
 
         public void UpdateSelectedDrawable(Drawable d, TextureDictionary t, Dictionary<string, string> updates)
         {
@@ -1056,9 +1112,11 @@ namespace CodeWalker
                         break;
                     case "EnableHighHeels":
                         Renderer.SelDrawable.IsHighHeelsEnabled = bool.Parse(value);
+                        Renderer.renderfloor = Renderer.SelDrawable.IsHighHeelsEnabled;
                         break;
                     case "HighHeelsValue":
                         Renderer.SelDrawable.HighHeelsValue = Convert.ToSingle(value) / 10;
+                        Renderer.renderfloor = Renderer.SelDrawable.IsHighHeelsEnabled;
                         highheelvaluechanged = true;
                         break;
                     case "GenderChanged":
@@ -1076,14 +1134,18 @@ namespace CodeWalker
             {
                 int polycount = 0;
                 int vertcount = 0;
-                foreach (var model in Renderer.SelDrawable.DrawableModels.High)
+                var highModels = Renderer.SelDrawable.DrawableModels?.High;
+                if (highModels != null)
                 {
-                    if (model.Geometries != null)
+                    foreach (var model in highModels)
                     {
-                        foreach (var geom in model.Geometries)
+                        if (model.Geometries != null)
                         {
-                            polycount += (int)(geom.IndicesCount / 3);
-                            vertcount += geom.VerticesCount;
+                            foreach (var geom in model.Geometries)
+                            {
+                                polycount += (int)(geom.IndicesCount / 3);
+                                vertcount += geom.VerticesCount;
+                            }
                         }
                     }
                 }
@@ -1444,7 +1506,30 @@ namespace CodeWalker
         {
             if (e.Node != null)
             {
+                UpdatePersistedComponentVisibility(e.Node, e.Action);
                 UpdateSelectionDrawFlags(e.Node);
+            }
+        }
+
+        private bool IsPersistableComponentNode(TreeNode node)
+        {
+            return (node?.Parent == null) &&
+                   !node.Text.StartsWith("Selected (") &&
+                   !node.Text.StartsWith("Saved (");
+        }
+
+        private void UpdatePersistedComponentVisibility(TreeNode node, TreeViewAction action)
+        {
+            if (!IsPersistableComponentNode(node)) return;
+            if ((action != TreeViewAction.ByMouse) && (action != TreeViewAction.ByKeyboard)) return;
+
+            if (node.Checked)
+            {
+                _hiddenComponentNodeNames.Remove(node.Text);
+            }
+            else
+            {
+                _hiddenComponentNodeNames.Add(node.Text);
             }
         }
 
@@ -1453,6 +1538,7 @@ namespace CodeWalker
             if (e.Node != null)
             {
                 e.Node.Checked = !e.Node.Checked;
+                UpdatePersistedComponentVisibility(e.Node, TreeViewAction.ByMouse);
                 //UpdateSelectionDrawFlags(e.Node);
             }
         }
@@ -1623,6 +1709,7 @@ namespace CodeWalker
 
             if (EnableAnimationCheckBox.Checked)
             {
+                LoadPed(PedNameComboBox.Text); //hacky reload ped to make it work
                 LoadAnimsForModel(SelectedPed.Name);
             } 
             else

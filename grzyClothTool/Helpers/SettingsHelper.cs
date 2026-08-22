@@ -1,5 +1,7 @@
-﻿using System;
+﻿using grzyClothTool.Constants;
+using System;
 using System.ComponentModel;
+using static grzyClothTool.Enums;
 
 namespace grzyClothTool.Helpers;
 
@@ -66,6 +68,35 @@ public class SettingsHelper : INotifyPropertyChanged
         set => SetProperty(ref _textureResolutionLimitSpecular, value, nameof(TextureResolutionLimitSpecular), revalidateDrawables: true);
     }
 
+    private int _maxDrawableNumber;
+
+    public int MaxDrawableNumber
+    {
+        get => _maxDrawableNumber;
+        set
+        {
+            var clamped = Math.Clamp(value, 0, GlobalConstants.MAX_DRAWABLE_NUMBER_LIMIT);
+            if (_maxDrawableNumber != clamped)
+            {
+                _maxDrawableNumber = clamped;
+                Properties.Settings.Default.MaxDrawablesPerAddon = clamped;
+                Properties.Settings.Default.Save();
+                OnPropertyChanged(nameof(MaxDrawableNumber));
+
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    MainWindow.AddonManager?.RedistributeDrawables();
+                }));
+            }
+            else if (!Equals(value, clamped))
+            {
+                // Value was out of range and got clamped to the current value;
+                // still notify so the UI snaps back to the clamped number.
+                OnPropertyChanged(nameof(MaxDrawableNumber));
+            }
+        }
+    }
+
     public static bool Preview3DAvailable { get; set; } = true;
 
     private SettingsHelper()
@@ -76,9 +107,11 @@ public class SettingsHelper : INotifyPropertyChanged
         _polygonLimitLow = Properties.Settings.Default.PolygonLimitLow;
         _autoDeleteFiles = Properties.Settings.Default.AutoDeleteFiles;
         _markNewDrawables = Properties.Settings.Default.MarkNewDrawables;
+        _drawableGroupingMode = (GroupingMode)Properties.Settings.Default.DrawableGroupingMode;
         _textureResolutionLimitDiffuse = Properties.Settings.Default.TextureResolutionLimitDiffuse;
         _textureResolutionLimitNormal = Properties.Settings.Default.TextureResolutionLimitNormal;
         _textureResolutionLimitSpecular = Properties.Settings.Default.TextureResolutionLimitSpecular;
+        _maxDrawableNumber = Math.Clamp(Properties.Settings.Default.MaxDrawablesPerAddon, 0, GlobalConstants.MAX_DRAWABLE_NUMBER_LIMIT);
     }
 
     private void SetProperty<T>(ref T field, T value, string propertyName, bool revalidateDrawables = false)
@@ -108,7 +141,7 @@ public class SettingsHelper : INotifyPropertyChanged
                                 embeddedTexture?.Details?.Validate();
                             }
                             
-                            drawable.Details.Validate(drawable.Textures);
+                            drawable.ValidateDetails();
                         }
                     }
                     
@@ -129,6 +162,22 @@ public class SettingsHelper : INotifyPropertyChanged
     {
         get => _markNewDrawables;
         set => SetProperty(ref _markNewDrawables, value, nameof(MarkNewDrawables));
+    }
+
+    private GroupingMode _drawableGroupingMode;
+    public GroupingMode DrawableGroupingMode
+    {
+        get => _drawableGroupingMode;
+        set
+        {
+            if (!Equals(_drawableGroupingMode, value))
+            {
+                _drawableGroupingMode = value;
+                Properties.Settings.Default.DrawableGroupingMode = (int)value;
+                Properties.Settings.Default.Save();
+                OnPropertyChanged(nameof(DrawableGroupingMode));
+            }
+        }
     }
 
     protected void OnPropertyChanged(string propertyName)

@@ -32,5 +32,11 @@
     <Setting Name="TextureResolutionLimitSpecular" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">1024</Value>
     </Setting>
+    <Setting Name="DrawableGroupingMode" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
+    <Setting Name="MaxDrawablesPerAddon" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">255</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

@@ -67,6 +67,11 @@ public static class ImgHelper
     {
         try
         {
+            if (shouldSkipOptimization && gtxt.Extension == ".dds")
+            {
+                return GetDDSBytes(gtxt);
+            }
+
             var ytd = new YtdFile
             {
                 TextureDict = new TextureDictionary()
@@ -79,7 +84,7 @@ public static class ImgHelper
             if (!shouldSkipOptimization)
             {
                 var details = gtxt.OptimizeDetails;
-                img.Resize((uint)details.Width, (uint)details.Height);
+                ResizeExact(img, details.Width, details.Height, details.Compression);
                 img.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(details.Compression));
                 img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
                 img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", details.MipMapCount);
@@ -110,7 +115,7 @@ public static class ImgHelper
             using var img = new MagickImage(imgBytes);
             img.Format = MagickFormat.Dds;
 
-            img.Resize((uint)optimizeDetails.Width, (uint)optimizeDetails.Height);
+            ResizeExact(img, optimizeDetails.Width, optimizeDetails.Height, optimizeDetails.Compression);
             img.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(optimizeDetails.Compression));
             img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
             img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", optimizeDetails.MipMapCount);
@@ -158,6 +163,39 @@ public static class ImgHelper
         return ytd.Save();
     }
 
+    public static byte[] GetDDSFileBytes(GTexture gtxt)
+    {
+        if (gtxt.Extension == ".dds")
+        {
+            return File.ReadAllBytes(gtxt.FullFilePath);
+        }
+
+        if (gtxt.Extension == ".ytd")
+        {
+            var ytd = new YtdFile();
+            ytd.Load(File.ReadAllBytes(gtxt.FullFilePath));
+            if (ytd.TextureDict.Textures.Count == 0)
+            {
+                return [];
+            }
+
+            return CodeWalker.Utils.DDSIO.GetDDSFile(ytd.TextureDict.Textures[0]);
+        }
+
+        if (gtxt.Extension == ".jpg" || gtxt.Extension == ".png")
+        {
+            using var img = GetImage(gtxt.FullFilePath);
+            img.Format = MagickFormat.Dds;
+
+            var stream = new MemoryStream();
+            img.Write(stream);
+
+            return stream.ToArray();
+        }
+
+        throw new NotSupportedException($"Unsupported file extension: {gtxt.Extension}");
+    }
+
     private static string GetCompressionString(string cwCompression)
     {
         return cwCompression switch
@@ -168,5 +206,26 @@ public static class ImgHelper
             "D3DFMT_A8R8G8B8" => "none",
             _ => "dxt5",
         };
+    }
+
+    private static bool IsBlockCompressed(string cwCompression) => cwCompression switch
+    {
+        "D3DFMT_DXT1" or "D3DFMT_DXT3" or "D3DFMT_DXT5"
+        or "D3DFMT_ATI1" or "D3DFMT_ATI2" or "D3DFMT_BC7" => true,
+        _ => false,
+    };
+
+    private static int RoundDownToMultipleOf4(int value) => Math.Max(4, value - (value % 4));
+
+    private static void ResizeExact(MagickImage img, int width, int height, string cwCompression)
+    {
+        if (IsBlockCompressed(cwCompression))
+        {
+            width = RoundDownToMultipleOf4(width);
+            height = RoundDownToMultipleOf4(height);
+        }
+
+        var geometry = new MagickGeometry((uint)width, (uint)height) { IgnoreAspectRatio = true };
+        img.Resize(geometry);
     }
 }

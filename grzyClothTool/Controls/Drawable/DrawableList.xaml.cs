@@ -19,6 +19,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using static grzyClothTool.Controls.CustomMessageBox;
+using static grzyClothTool.Enums;
 
 namespace grzyClothTool.Controls
 {
@@ -29,6 +30,8 @@ namespace grzyClothTool.Controls
     {
         public event EventHandler DrawableListSelectedValueChanged;
         public event KeyEventHandler DrawableListKeyDown;
+
+        public event EventHandler DrawableDeleteRequested;
         public event PropertyChangedEventHandler PropertyChanged;
 
         public static readonly DependencyProperty ItemsSourceProperty =
@@ -85,12 +88,30 @@ namespace grzyClothTool.Controls
         private readonly Dictionary<string, bool> _groupExpandedStates = value;
         private bool _isBatchUpdating = false;
 
+        public bool IsPrimaryGroupingByTypeName => SettingsHelper.Instance.DrawableGroupingMode == GroupingMode.ByType;
+
         public DrawableList()
         {
             InitializeComponent();
-            
+
             MyListBox.MouseLeave += MyListBox_MouseLeave;
             MyListBox.Loaded += MyListBox_Loaded;
+
+            SettingsHelper.Instance.PropertyChanged += OnSettingsPropertyChanged;
+        }
+
+        private void OnSettingsPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(SettingsHelper.DrawableGroupingMode))
+            {
+                OnPropertyChanged(nameof(IsPrimaryGroupingByTypeName));
+                SetupGrouping();
+            }
+        }
+
+        private void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
         private void MyListBox_Loaded(object sender, RoutedEventArgs e)
@@ -159,6 +180,7 @@ namespace grzyClothTool.Controls
             }
 
             collection.CollectionChanged -= ItemsSource_CollectionChanged;
+            collection.CollectionChanged -= OnCollectionChangedForCount;
         }
 
         private void ItemsSource_CollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
@@ -248,41 +270,58 @@ namespace grzyClothTool.Controls
             if (ItemsSource == null) return;
 
             DrawablesView = CollectionViewSource.GetDefaultView(ItemsSource);
-            
-            if (DrawablesView.GroupDescriptions.Count == 0 || 
-                !(DrawablesView.GroupDescriptions[0] is PropertyGroupDescription pgd) ||
-                pgd.PropertyName != "Group")
+
+            var mode = SettingsHelper.Instance.DrawableGroupingMode;
+
+            using (DrawablesView.DeferRefresh())
             {
                 DrawablesView.GroupDescriptions.Clear();
-                DrawablesView.GroupDescriptions.Add(new PropertyGroupDescription("Group"));
-            }
 
-            DrawablesView.SortDescriptions.Clear();
-            if (DrawablesView is ListCollectionView listView)
-            {
-                listView.CustomSort = new DrawableGroupComparer();
-            }
+                switch (mode)
+                {
+                    case GroupingMode.ByType:
+                        DrawablesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(GDrawable.TypeName)));
+                        break;
+                    case GroupingMode.GroupDefined:
+                        DrawablesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(GDrawable.Group)));
+                        break;
+                    case GroupingMode.Both:
+                        DrawablesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(GDrawable.Group)));
+                        DrawablesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(GDrawable.TypeName)));
+                        break;
+                    // None: no grouping
+                }
 
-            if (DrawablesView is ICollectionViewLiveShaping liveView && liveView.CanChangeLiveGrouping)
-            {
-                if (liveView.IsLiveGrouping != true)
+                DrawablesView.SortDescriptions.Clear();
+                if (DrawablesView is ListCollectionView listView)
+                {
+                    listView.CustomSort = new DrawableGroupComparer();
+                }
+
+                if (DrawablesView is ICollectionViewLiveShaping liveView && liveView.CanChangeLiveGrouping)
                 {
                     liveView.LiveGroupingProperties.Clear();
-                    liveView.LiveGroupingProperties.Add(nameof(GDrawable.Group));
-                    liveView.IsLiveGrouping = true;
+                    if (mode == GroupingMode.GroupDefined || mode == GroupingMode.Both)
+                        liveView.LiveGroupingProperties.Add(nameof(GDrawable.Group));
+                    if (mode == GroupingMode.ByType || mode == GroupingMode.Both)
+                        liveView.LiveGroupingProperties.Add(nameof(GDrawable.TypeName));
+                    liveView.IsLiveGrouping = liveView.LiveGroupingProperties.Count > 0;
+
+                    if (liveView.CanChangeLiveSorting)
+                    {
+                        liveView.LiveSortingProperties.Clear();
+                        liveView.LiveSortingProperties.Add(nameof(GDrawable.Group));
+                        liveView.LiveSortingProperties.Add(nameof(GDrawable.TypeName));
+                        liveView.LiveSortingProperties.Add(nameof(GDrawable.Number));
+                        liveView.IsLiveSorting = true;
+                    }
                 }
-                
-                if (liveView.CanChangeLiveSorting)
-                {
-                    liveView.LiveSortingProperties.Clear();
-                    liveView.LiveSortingProperties.Add(nameof(GDrawable.Group));
-                    liveView.LiveSortingProperties.Add(nameof(GDrawable.Number));
-                    liveView.IsLiveSorting = true;
-                }
+
+                DrawablesView.Filter = string.IsNullOrWhiteSpace(SearchText) ? null : FilterDrawable;
             }
-            
-            ApplySearchFilter();
-            
+
+            UpdateFilteredCount();
+
             // update filtered count when collection changes
             if (ItemsSource is System.Collections.Specialized.INotifyCollectionChanged notifyCollection)
             {
@@ -316,7 +355,9 @@ namespace grzyClothTool.Controls
 
         private void UpdateFilteredCount()
         {
-            if (DrawablesView == null)
+            // Without a filter every item is visible - skip enumerating the whole grouped view,
+            // which is expensive for large addons.
+            if (DrawablesView == null || DrawablesView.Filter == null)
             {
                 FilteredCount = ItemsSource?.Count ?? 0;
                 return;
@@ -437,8 +478,46 @@ namespace grzyClothTool.Controls
             }
         }
 
+        private void IgnoreWarnings_Click(object sender, RoutedEventArgs e)
+        {
+            if (DrawableListSelectedValue is not GDrawable drawable)
+            {
+                return;
+            }
+
+            var shouldIgnoreWarnings = !drawable.IgnoreWarnings;
+
+            if (shouldIgnoreWarnings)
+            {
+                var result = Show(
+                    "Ignoring warnings only hides warning indicators for this drawable. The asset may still need fixing, and warnings will show again if you disable this option.\n\nDo you want to ignore warnings for this drawable?",
+                    "Ignore warnings",
+                    CustomMessageBoxButtons.OKCancel,
+                    CustomMessageBoxIcon.Warning);
+
+                if (result != CustomMessageBoxResult.OK)
+                {
+                    if (sender is MenuItem menuItem)
+                    {
+                        menuItem.IsChecked = drawable.IgnoreWarnings;
+                    }
+
+                    return;
+                }
+            }
+
+            drawable.IgnoreWarnings = shouldIgnoreWarnings;
+            SaveHelper.SetUnsavedChanges(true);
+        }
+
         private void DeleteDrawable_Click(object sender, RoutedEventArgs e)
         {
+            if (DrawableDeleteRequested != null)
+            {
+                DrawableDeleteRequested.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
             var selectedDrawables = MainWindow.AddonManager.SelectedAddon.SelectedDrawables.ToList();
             MainWindow.AddonManager.DeleteDrawables(selectedDrawables);
         }
