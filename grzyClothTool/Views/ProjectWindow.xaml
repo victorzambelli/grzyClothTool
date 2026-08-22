@@ -168,26 +168,7 @@ mc:Ignorable="d">
                                                       FontSize="12"
                                                       FontWeight="SemiBold"
                                                       Foreground="{DynamicResource Brush900}"
-                                                      VerticalAlignment="Center"
-                                                      Margin="0,0,10,0"/>
-                                            <Button x:Name="ClothingLocatorBtn" 
-                                                    Click="ClothingLocator_Click"
-                                                    Background="Transparent"
-                                                    BorderThickness="0"
-                                                    Cursor="Hand"
-                                                    Padding="4,2"
-                                                    ToolTip="Open Modded Clothing Locator">
-                                                <StackPanel Orientation="Horizontal">
-                                                    <icons:MaterialIcon Kind="MapMarker" 
-                                                                       Width="14" Height="14"
-                                                                       Foreground="#3b82f6"
-                                                                       Margin="0,0,4,0"/>
-                                                    <TextBlock Text="Locator" 
-                                                               FontSize="11" 
-                                                               Foreground="#3b82f6"
-                                                               FontWeight="SemiBold"/>
-                                                </StackPanel>
-                                            </Button>
+                                                      VerticalAlignment="Center" />
                                         </StackPanel>
                                         
                                         <Border Grid.Column="1"
