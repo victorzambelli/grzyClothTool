@@ -1,4 +1,4 @@
-﻿using grzyClothTool.Extensions;
+using grzyClothTool.Extensions;
 using grzyClothTool.Views;
 using Material.Icons;
 using System;

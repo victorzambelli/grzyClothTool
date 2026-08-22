@@ -114,14 +114,24 @@
                                                       Margin="0,2,0,0"/>
                                         </StackPanel>
                                         
-                                        <Button Grid.Column="2"
-                                               Content="Delete All Except First"
-                                               Tag="{Binding}"
-                                               Click="DeleteGroupExceptFirst_Click"
-                                               Style="{StaticResource ActionButton}"
-                                               Padding="10,5"
-                                               FontSize="11"
-                                               Margin="0"/>
+                                        <StackPanel Grid.Column="2"
+                                                    Orientation="Horizontal"
+                                                    VerticalAlignment="Center"
+                                                    Margin="0,16,0,0">
+                                            <Button
+                                                Content="Merge All"
+                                                Tag="{Binding}"
+                                                Click="MergeAll_Click"
+                                                Style="{StaticResource ActionButton}"
+                                                FontSize="11"/>
+                                            <Button
+                                                Content="Delete All Except First"
+                                                Tag="{Binding}"
+                                                Click="DeleteGroupExceptFirst_Click"
+                                                Style="{StaticResource ActionButton}"
+                                                Margin="0"
+                                                FontSize="11"/>
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
                                 
@@ -212,6 +222,9 @@
                    Orientation="Horizontal" 
                    HorizontalAlignment="Right"
                    Margin="0,16,0,0">
+            <Button Content="Merge All"
+                   Click="MergeAllGlobal_Click"
+                   Style="{StaticResource ActionButton}"/>
             <Button Content="Refresh"
                    Click="Refresh_Click"
                    Style="{StaticResource ActionButton}"/>

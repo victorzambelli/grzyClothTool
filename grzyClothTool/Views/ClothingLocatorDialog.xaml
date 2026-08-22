@@ -1,0 +1,193 @@
+<Window x:Class="grzyClothTool.Views.ClothingLocatorDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:icons="clr-namespace:Material.Icons.WPF;assembly=Material.Icons.WPF"
+        Title="Clothing Locator"
+        Width="420"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="{DynamicResource Brush50}"
+        ShowInTaskbar="False">
+
+    <Window.Resources>
+        <Style x:Key="LocatorButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource Brush600}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="{DynamicResource Brush300}"/>
+                    <Setter Property="Foreground" Value="{DynamicResource Brush500}"/>
+                </Trigger>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource Brush700}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Title -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,20">
+            <icons:MaterialIcon Kind="MapMarker" 
+                               Width="24" Height="24"
+                               Foreground="{DynamicResource Brush700}"
+                               Margin="0,0,8,0"
+                               VerticalAlignment="Center"/>
+            <TextBlock Text="Clothing Locator"
+                       FontSize="20"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brush950}"
+                       VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Category Dropdown -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <TextBlock Text="Category"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brush700}"
+                       Margin="0,0,0,8"/>
+            <ComboBox x:Name="CategoryComboBox"
+                      FontSize="14"
+                      Padding="10,8"
+                      Background="{DynamicResource Brush100}"
+                      Foreground="{DynamicResource Brush950}"
+                      BorderBrush="{DynamicResource Brush300}"
+                      BorderThickness="1"
+                      SelectionChanged="CategoryComboBox_SelectionChanged"/>
+        </StackPanel>
+
+        <!-- Base Count (read-only) -->
+        <StackPanel Grid.Row="2" Margin="0,0,0,16">
+            <TextBlock Text="Base Game Count (auto-filled)"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brush700}"
+                       Margin="0,0,0,8"/>
+            <TextBox x:Name="BaseCountTextBox"
+                     FontSize="14"
+                     Padding="12,10"
+                     Background="{DynamicResource Brush200}"
+                     Foreground="{DynamicResource Brush600}"
+                     BorderBrush="{DynamicResource Brush300}"
+                     BorderThickness="1"
+                     IsReadOnly="True"/>
+        </StackPanel>
+
+        <!-- Target In-Game ID -->
+        <StackPanel Grid.Row="3" Margin="0,0,0,16">
+            <TextBlock Text="Target In-Game ID"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource Brush700}"
+                       Margin="0,0,0,8"/>
+            <TextBox x:Name="TargetIdTextBox"
+                     FontSize="14"
+                     Padding="12,10"
+                     Background="{DynamicResource Brush100}"
+                     Foreground="{DynamicResource Brush950}"
+                     BorderBrush="{DynamicResource Brush300}"
+                     BorderThickness="1"
+                     TextChanged="TargetIdTextBox_TextChanged"/>
+        </StackPanel>
+
+        <!-- Result -->
+        <Border Grid.Row="4"
+                x:Name="ResultBorder"
+                Background="#dbeafe"
+                BorderBrush="#93c5fd"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="12,10"
+                Margin="0,0,0,20"
+                Visibility="Collapsed">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <icons:MaterialIcon Kind="CheckCircle" 
+                                       Width="18" Height="18"
+                                       Foreground="#2563eb"
+                                       Margin="0,0,8,0"
+                                       VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ResultText"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Foreground="#1e40af"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock x:Name="ResultDetailText"
+                           FontSize="12"
+                           Foreground="#1e40af"
+                           Margin="26,4,0,0"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Error -->
+        <Border Grid.Row="4"
+                x:Name="ErrorBorder"
+                Background="#fef2f2"
+                BorderBrush="#fca5a5"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="12,10"
+                Margin="0,0,0,20"
+                Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal">
+                <icons:MaterialIcon Kind="AlertCircle" 
+                                   Width="18" Height="18"
+                                   Foreground="#dc2626"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center"/>
+                <TextBlock x:Name="ErrorText"
+                           FontSize="13"
+                           Foreground="#991b1b"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button Content="Close"
+                    Width="100"
+                    Height="36"
+                    Margin="0,0,12,0"
+                    Background="{DynamicResource Brush200}"
+                    Foreground="{DynamicResource Brush900}"
+                    BorderThickness="0"
+                    Click="Close_Click"/>
+            <Button x:Name="SearchButton"
+                    Content="Search in Project"
+                    Width="140"
+                    Height="36"
+                    Style="{StaticResource LocatorButtonStyle}"
+                    IsEnabled="False"
+                    Click="Search_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

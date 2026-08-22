@@ -1,4 +1,4 @@
-﻿using CodeWalker;
+using CodeWalker;
 using CodeWalker.GameFiles;
 using grzyClothTool.Controls;
 using grzyClothTool.Extensions;
@@ -239,6 +239,73 @@ namespace grzyClothTool.Views
             SaveHelper.SetUnsavedChanges(true);
         }
 
+        private void ClothingLocator_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new ClothingLocatorDialog
+            {
+                Owner = Window.GetWindow(this)
+            };
+
+            if (dialog.ShowDialog() == true && dialog.IsSearchRequested && !string.IsNullOrEmpty(dialog.ResultModdedID))
+            {
+                // Find the search box in the current TabControl ContentPresenter
+                if (AddonTabControl.ItemContainerGenerator.ContainerFromItem(AddonTabControl.SelectedItem) is TabItem selectedTab)
+                {
+                    var contentPresenter = FindVisualChild<ContentPresenter>(selectedTab);
+                    if (contentPresenter != null)
+                    {
+                        var dataTemplateControl = contentPresenter.ContentTemplate.FindName("HeaderSearchBox", contentPresenter) as System.Windows.Controls.TextBox;
+                        if (dataTemplateControl != null)
+                        {
+                            dataTemplateControl.Text = dialog.ResultModdedID;
+                            return;
+                        }
+                    }
+                }
+                
+                // Fallback approach: search the entire visual tree of the TabControl for a TextBox named "HeaderSearchBox"
+                var searchBox = FindVisualChildByName<System.Windows.Controls.TextBox>(AddonTabControl, "HeaderSearchBox");
+                if (searchBox != null)
+                {
+                    searchBox.Text = dialog.ResultModdedID;
+                }
+            }
+        }
+
+        private static T FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+        {
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child != null && child is T)
+                    return (T)child;
+                else
+                {
+                    T childOfChild = FindVisualChild<T>(child);
+                    if (childOfChild != null)
+                        return childOfChild;
+                }
+            }
+            return null;
+        }
+
+        private static T FindVisualChildByName<T>(DependencyObject parent, string name) where T : FrameworkElement
+        {
+            for (int i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is T element && element.Name == name)
+                    return element;
+                else
+                {
+                    T childOfChild = FindVisualChildByName<T>(child, name);
+                    if (childOfChild != null)
+                        return childOfChild;
+                }
+            }
+            return null;
+        }
+
         private void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (e.AddedItems.Count > 0)
@@ -296,6 +363,81 @@ namespace grzyClothTool.Views
                 MainWindow.AddonManager.IsPreviewEnabled = true;
                 
                 UpdatePreviewButtonState();
+            }
+        }
+
+        private void ReloadPreview_Btn(object sender, RoutedEventArgs e)
+        {
+            var mainWindow = MainWindow.Instance;
+            if (mainWindow == null) return;
+
+            mainWindow.PreviewHost?.ReloadPreview();
+        }
+
+        private void OptimizeAll_Btn(object sender, RoutedEventArgs e)
+        {
+            if (MainWindow.AddonManager.Addons == null || MainWindow.AddonManager.Addons.Count == 0)
+            {
+                CustomMessageBox.Show("No addons loaded.", "Optimize Textures",
+                    CustomMessageBox.CustomMessageBoxButtons.OKOnly,
+                    CustomMessageBox.CustomMessageBoxIcon.Warning);
+                return;
+            }
+
+            var result = CustomMessageBox.Show(
+                "This will schedule all textures larger than 2048x2048 to be downscaled to 2048x2048 during build.\n\nDo you want to continue?",
+                "Optimize All Textures > 2K",
+                CustomMessageBox.CustomMessageBoxButtons.OKCancel,
+                CustomMessageBox.CustomMessageBoxIcon.Warning);
+
+            if (result != CustomMessageBox.CustomMessageBoxResult.OK)
+                return;
+
+            int optimizedCount = 0;
+
+            foreach (var addon in MainWindow.AddonManager.Addons)
+            {
+                foreach (var drawable in addon.Drawables)
+                {
+                    if (drawable.IsReserved || drawable.Textures == null)
+                        continue;
+
+                    foreach (var texture in drawable.Textures)
+                    {
+                        if (texture.IsOptimizedDuringBuild)
+                            continue;
+
+                        var details = OptimizeWindow.GetTextureDetails(texture);
+                        if (details.Width > 2048 || details.Height > 2048)
+                        {
+                            texture.IsOptimizedDuringBuild = true;
+                            texture.OptimizeDetails = new GTextureDetails
+                            {
+                                Width = 2048,
+                                Height = 2048,
+                                Compression = details.Compression,
+                                MipMapCount = ImgHelper.GetCorrectMipMapAmount(2048, 2048),
+                                IsOptimizeNeeded = false
+                            };
+                            optimizedCount++;
+                        }
+                    }
+                }
+            }
+
+            if (optimizedCount > 0)
+            {
+                SaveHelper.SetUnsavedChanges(true);
+                LogHelper.Log($"{optimizedCount} texture(s) scheduled for optimization to 2048x2048 during build.", LogType.Info);
+                CustomMessageBox.Show($"{optimizedCount} texture(s) will be optimized to 2048x2048 during the next build.",
+                    "Optimization Scheduled",
+                    CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+            }
+            else
+            {
+                CustomMessageBox.Show("No textures larger than 2048x2048 were found, or all were already optimized.",
+                    "Nothing to Optimize",
+                    CustomMessageBox.CustomMessageBoxButtons.OKOnly);
             }
         }
 

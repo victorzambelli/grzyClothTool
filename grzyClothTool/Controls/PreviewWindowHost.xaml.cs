@@ -2,6 +2,7 @@ using CodeWalker;
 using grzyClothTool.Helpers;
 using grzyClothTool.Models.Drawable;
 using grzyClothTool.Models.Texture;
+using grzyClothTool.Views;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -89,6 +90,48 @@ namespace grzyClothTool.Controls
                 
                 SettingsHelper.Preview3DAvailable = false;
                 Preview3DAvailabilityChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        public void ReloadPreview()
+        {
+            try
+            {
+                // Tear down the existing preview
+                if (_customPedsForm != null)
+                {
+                    PreviewHost.Child = null;
+
+                    if (!_customPedsForm.IsDisposed)
+                    {
+                        _customPedsForm.Close();
+                        _customPedsForm.Dispose();
+                    }
+
+                    _customPedsForm = null;
+                }
+
+                _isInitialized = false;
+                PlaceholderText.Text = "Reloading 3D Preview...";
+                PlaceholderText.Visibility = Visibility.Visible;
+
+                LogHelper.Log("Reloading 3D Preview...", Views.LogType.Info);
+
+                // Re-initialize from scratch
+                InitializePreview();
+
+                // Re-send the current drawable to the preview if one is selected
+                if (_isInitialized && MainWindow.AddonManager.IsPreviewEnabled)
+                {
+                    CWHelper.SendDrawableUpdateToPreview(new RoutedEventArgs());
+                }
+
+                LogHelper.Log("3D Preview reloaded successfully.", Views.LogType.Info);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.Log($"Failed to reload 3D Preview: {ex.Message}", Views.LogType.Error);
+                ErrorLogHelper.LogError("Failed to reload 3D Preview", ex);
             }
         }
 
