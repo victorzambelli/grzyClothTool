@@ -621,6 +621,7 @@ namespace grzyClothTool.Views
         private const int OPTIMIZE_LOAD_POLL_MS = 250;
         private const int OPTIMIZE_LOAD_TIMEOUT_MS = 120000;
         private const int OPTIMIZE_CHUNK_SIZE = 250;
+        private const int OPTIMIZE_FAILED_SAMPLE = 20;
 
         private bool _isOptimizingAll;
 
@@ -757,7 +758,9 @@ namespace grzyClothTool.Views
                     }
                 }
 
-                int scheduled = 0, alreadyScheduled = 0, alreadySmall = 0, unreadable = 0, processed = 0;
+                int scheduled = 0, alreadyScheduled = 0, alreadySmall = 0, unreadable = 0;
+                int stillLoading = 0, emptySlots = 0, processed = 0;
+                var failedNames = new List<string>();
 
                 foreach (var texture in externalTextures)
                 {
@@ -773,7 +776,18 @@ namespace grzyClothTool.Views
                     }
                     else if (texture.TxtDetails == null || texture.TxtDetails.Width <= 0 || texture.TxtDetails.Height <= 0)
                     {
-                        unreadable++;
+                        if (texture.IsLoading)
+                        {
+                            stillLoading++;
+                        }
+                        else
+                        {
+                            unreadable++;
+                            if (failedNames.Count < OPTIMIZE_FAILED_SAMPLE)
+                            {
+                                failedNames.Add(texture.DisplayName);
+                            }
+                        }
                     }
                     else
                     {
@@ -799,9 +813,19 @@ namespace grzyClothTool.Views
                         texture.IsOptimizedDuringBuild = true;
                         scheduled++;
                     }
+                    else if (!texture.HasOriginalTexture)
+                    {
+                        // Specular/normal slot declared by the drawable with no texture actually embedded.
+                        // There is nothing to downscale here, so it is not a failure.
+                        emptySlots++;
+                    }
                     else if (texture.Details == null || texture.Details.Width <= 0 || texture.Details.Height <= 0)
                     {
                         unreadable++;
+                        if (failedNames.Count < OPTIMIZE_FAILED_SAMPLE)
+                        {
+                            failedNames.Add(texture.Details?.Name ?? "unknown");
+                        }
                     }
                     else
                     {
@@ -824,12 +848,27 @@ namespace grzyClothTool.Views
                              $"Scheduled for downscale: {scheduled}\n" +
                              $"Already scheduled before: {alreadyScheduled}\n" +
                              $"Already {OPTIMIZE_TARGET_SIZE}px or smaller: {alreadySmall}\n" +
+                             $"Empty specular/normal slots: {emptySlots}\n" +
+                             $"Still loading: {stillLoading}\n" +
                              $"Could not be read: {unreadable}";
+
+                if (emptySlots > 0)
+                {
+                    report += "\n\nEmpty slots are drawables that declare a specular/normal texture without " +
+                              "actually embedding one. There is nothing to downscale in them.";
+                }
+
+                if (stillLoading > 0)
+                {
+                    report += "\n\nSome textures were still loading. Wait for the project to finish loading " +
+                              "and run it again to cover them.";
+                }
 
                 if (unreadable > 0)
                 {
-                    report += "\n\nTextures that could not be read are either still loading or corrupted. " +
-                              "Wait for the project to finish loading and run it again to cover them.";
+                    report += $"\n\n{unreadable} texture(s) could not be read (corrupted or unsupported format). " +
+                              "See the log window for their names.";
+                    LogHelper.Log($"Optimize > 2K: unreadable texture(s): {string.Join(", ", failedNames)}", LogType.Warning);
                 }
 
                 ProgressHelper.Stop($"Optimize > 2K: {scheduled} texture(s) scheduled in {{0}}", true);
