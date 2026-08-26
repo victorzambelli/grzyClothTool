@@ -1,4 +1,4 @@
-using CodeWalker;
+﻿using CodeWalker;
 using CodeWalker.GameFiles;
 using grzyClothTool.Controls;
 using grzyClothTool.Extensions;
@@ -617,7 +617,59 @@ namespace grzyClothTool.Views
             mainWindow.PreviewHost?.ReloadPreview();
         }
 
-        private void OptimizeAll_Btn(object sender, RoutedEventArgs e)
+        private const int OPTIMIZE_TARGET_SIZE = 2048;
+        private const int OPTIMIZE_LOAD_POLL_MS = 250;
+        private const int OPTIMIZE_LOAD_TIMEOUT_MS = 120000;
+        private const int OPTIMIZE_CHUNK_SIZE = 250;
+
+        private bool _isOptimizingAll;
+
+        // Halves both sides until the longest one fits the target. Keeps the aspect ratio and
+        // power-of-two dimensions intact, so 4096x2048 becomes 2048x1024 instead of a squashed 2048x2048.
+        private static (int Width, int Height) ScaleToTarget(int width, int height)
+        {
+            var newWidth = width;
+            var newHeight = height;
+
+            while (Math.Max(newWidth, newHeight) > OPTIMIZE_TARGET_SIZE && newWidth > 1 && newHeight > 1)
+            {
+                newWidth /= 2;
+                newHeight /= 2;
+            }
+
+            return (newWidth, newHeight);
+        }
+
+        // Builds the optimize details for a texture bigger than the target, or returns false when the
+        // texture is unreadable, already small enough, or cannot be halved safely.
+        private static bool TryScheduleOptimization(GTextureDetails details, out GTextureDetails optimizeDetails)
+        {
+            optimizeDetails = null;
+
+            if (details == null || details.Width <= 0 || details.Height <= 0)
+                return false;
+
+            var (width, height) = ImgHelper.CheckPowerOfTwo(details.Width, details.Height);
+            if (Math.Max(width, height) <= OPTIMIZE_TARGET_SIZE)
+                return false;
+
+            var (newWidth, newHeight) = ScaleToTarget(width, height);
+            if (newWidth == width && newHeight == height)
+                return false;
+
+            optimizeDetails = new GTextureDetails
+            {
+                Width = newWidth,
+                Height = newHeight,
+                Compression = details.Compression,
+                MipMapCount = ImgHelper.GetCorrectMipMapAmount(newWidth, newHeight),
+                IsOptimizeNeeded = false
+            };
+
+            return true;
+        }
+
+        private async void OptimizeAll_Btn(object sender, RoutedEventArgs e)
         {
             if (MainWindow.AddonManager.Addons == null || MainWindow.AddonManager.Addons.Count == 0)
             {
@@ -627,60 +679,178 @@ namespace grzyClothTool.Views
                 return;
             }
 
-            var result = CustomMessageBox.Show(
-                "This will schedule all textures larger than 2048x2048 to be downscaled to 2048x2048 during build.\n\nDo you want to continue?",
+            if (_isOptimizingAll)
+                return;
+
+            var confirm = CustomMessageBox.Show(
+                $"This will schedule every texture larger than {OPTIMIZE_TARGET_SIZE}px to be downscaled during build.\n\n" +
+                $"Embedded textures are included and the aspect ratio is kept (longest side becomes {OPTIMIZE_TARGET_SIZE}px).\n\n" +
+                "Do you want to continue?",
                 "Optimize All Textures > 2K",
                 CustomMessageBox.CustomMessageBoxButtons.OKCancel,
                 CustomMessageBox.CustomMessageBoxIcon.Warning);
 
-            if (result != CustomMessageBox.CustomMessageBoxResult.OK)
+            if (confirm != CustomMessageBox.CustomMessageBoxResult.OK)
                 return;
 
-            int optimizedCount = 0;
+            _isOptimizingAll = true;
+            ProgressHelper.Start("Optimize > 2K: collecting textures");
 
-            foreach (var addon in MainWindow.AddonManager.Addons)
+            try
             {
-                foreach (var drawable in addon.Drawables)
-                {
-                    if (drawable.IsReserved || drawable.Textures == null)
-                        continue;
+                var externalTextures = new List<GTexture>();
+                var embeddedTextures = new List<GTextureEmbedded>();
 
-                    foreach (var texture in drawable.Textures)
+                foreach (var addon in MainWindow.AddonManager.Addons)
+                {
+                    foreach (var drawable in addon.Drawables)
                     {
-                        if (texture.IsOptimizedDuringBuild)
+                        if (drawable.IsReserved)
                             continue;
 
-                        var details = OptimizeWindow.GetTextureDetails(texture);
-                        if (details.Width > 2048 || details.Height > 2048)
+                        if (drawable.Textures != null)
                         {
-                            texture.IsOptimizedDuringBuild = true;
-                            texture.OptimizeDetails = new GTextureDetails
+                            externalTextures.AddRange(drawable.Textures);
+                        }
+
+                        if (drawable.Details?.EmbeddedTextures == null)
+                            continue;
+
+                        foreach (var embedded in drawable.Details.EmbeddedTextures.Values)
+                        {
+                            if (embedded != null)
                             {
-                                Width = 2048,
-                                Height = 2048,
-                                Compression = details.Compression,
-                                MipMapCount = ImgHelper.GetCorrectMipMapAmount(2048, 2048),
-                                IsOptimizeNeeded = false
-                            };
-                            optimizedCount++;
+                                embeddedTextures.Add(embedded);
+                            }
                         }
                     }
                 }
-            }
 
-            if (optimizedCount > 0)
-            {
-                SaveHelper.SetUnsavedChanges(true);
-                LogHelper.Log($"{optimizedCount} texture(s) scheduled for optimization to 2048x2048 during build.", LogType.Info);
-                CustomMessageBox.Show($"{optimizedCount} texture(s) will be optimized to 2048x2048 during the next build.",
-                    "Optimization Scheduled",
+                var total = externalTextures.Count + embeddedTextures.Count;
+                LogHelper.Log($"Optimize > 2K: {total} texture(s) found ({externalTextures.Count} external, {embeddedTextures.Count} embedded).", LogType.Info);
+
+                // Texture details are loaded in the background, so a texture that is still loading has
+                // no size to compare against yet. Reading it too early is what silently aborted this
+                // whole loop before, leaving most textures untouched.
+                var waited = 0;
+                var pending = externalTextures.Count(t => t.IsLoading);
+                if (pending > 0)
+                {
+                    LogHelper.Log($"Optimize > 2K: waiting for {pending} texture(s) to finish loading...", LogType.Info);
+
+                    while (pending > 0 && waited < OPTIMIZE_LOAD_TIMEOUT_MS)
+                    {
+                        await Task.Delay(OPTIMIZE_LOAD_POLL_MS);
+                        waited += OPTIMIZE_LOAD_POLL_MS;
+
+                        var stillPending = externalTextures.Count(t => t.IsLoading);
+                        if (waited % 2000 == 0 && stillPending != pending)
+                        {
+                            LogHelper.Log($"Optimize > 2K: {externalTextures.Count - stillPending}/{externalTextures.Count} texture(s) ready...", LogType.Info);
+                        }
+                        pending = stillPending;
+                    }
+
+                    if (pending > 0)
+                    {
+                        LogHelper.Log($"Optimize > 2K: {pending} texture(s) still loading after {OPTIMIZE_LOAD_TIMEOUT_MS / 1000}s, they will be reported as skipped.", LogType.Warning);
+                    }
+                }
+
+                int scheduled = 0, alreadyScheduled = 0, alreadySmall = 0, unreadable = 0, processed = 0;
+
+                foreach (var texture in externalTextures)
+                {
+                    if (texture.IsOptimizedDuringBuild)
+                    {
+                        alreadyScheduled++;
+                    }
+                    else if (TryScheduleOptimization(texture.TxtDetails, out var optimizeDetails))
+                    {
+                        texture.OptimizeDetails = optimizeDetails;
+                        texture.IsOptimizedDuringBuild = true;
+                        scheduled++;
+                    }
+                    else if (texture.TxtDetails == null || texture.TxtDetails.Width <= 0 || texture.TxtDetails.Height <= 0)
+                    {
+                        unreadable++;
+                    }
+                    else
+                    {
+                        alreadySmall++;
+                    }
+
+                    if (++processed % OPTIMIZE_CHUNK_SIZE == 0)
+                    {
+                        LogHelper.Log($"Optimize > 2K: {processed}/{total} analyzed, {scheduled} scheduled so far.", LogType.Info);
+                        await Task.Yield();
+                    }
+                }
+
+                foreach (var texture in embeddedTextures)
+                {
+                    if (texture.IsOptimizedDuringBuild)
+                    {
+                        alreadyScheduled++;
+                    }
+                    else if (TryScheduleOptimization(texture.Details, out var optimizeDetails))
+                    {
+                        texture.OptimizeDetails = optimizeDetails;
+                        texture.IsOptimizedDuringBuild = true;
+                        scheduled++;
+                    }
+                    else if (texture.Details == null || texture.Details.Width <= 0 || texture.Details.Height <= 0)
+                    {
+                        unreadable++;
+                    }
+                    else
+                    {
+                        alreadySmall++;
+                    }
+
+                    if (++processed % OPTIMIZE_CHUNK_SIZE == 0)
+                    {
+                        LogHelper.Log($"Optimize > 2K: {processed}/{total} analyzed, {scheduled} scheduled so far.", LogType.Info);
+                        await Task.Yield();
+                    }
+                }
+
+                if (scheduled > 0)
+                {
+                    SaveHelper.SetUnsavedChanges(true);
+                }
+
+                var report = $"Textures analyzed: {total}\n\n" +
+                             $"Scheduled for downscale: {scheduled}\n" +
+                             $"Already scheduled before: {alreadyScheduled}\n" +
+                             $"Already {OPTIMIZE_TARGET_SIZE}px or smaller: {alreadySmall}\n" +
+                             $"Could not be read: {unreadable}";
+
+                if (unreadable > 0)
+                {
+                    report += "\n\nTextures that could not be read are either still loading or corrupted. " +
+                              "Wait for the project to finish loading and run it again to cover them.";
+                }
+
+                ProgressHelper.Stop($"Optimize > 2K: {scheduled} texture(s) scheduled in {{0}}", true);
+                LogHelper.Log(report.Replace("\n", " | "), LogType.Info);
+
+                CustomMessageBox.Show(report, "Optimize > 2K - Report",
                     CustomMessageBox.CustomMessageBoxButtons.OKOnly);
             }
-            else
+            catch (Exception ex)
             {
-                CustomMessageBox.Show("No textures larger than 2048x2048 were found, or all were already optimized.",
-                    "Nothing to Optimize",
-                    CustomMessageBox.CustomMessageBoxButtons.OKOnly);
+                ProgressHelper.Stop("Optimize > 2K failed", false);
+                LogHelper.Log($"Optimize > 2K failed: {ex.Message}", LogType.Error);
+                ErrorLogHelper.LogError("Optimize > 2K failed", ex);
+
+                CustomMessageBox.Show($"Optimization failed: {ex.Message}", "Optimize > 2K",
+                    CustomMessageBox.CustomMessageBoxButtons.OKOnly,
+                    CustomMessageBox.CustomMessageBoxIcon.Error);
+            }
+            finally
+            {
+                _isOptimizingAll = false;
             }
         }
 
